@@ -14,6 +14,12 @@ from qgis.utils import active_plugins
 class QgisMCPServer(QObject):
     """Server class to handle socket connections and execute QGIS commands"""
     
+    # Signals for UI status updates
+    client_connected = pyqtSignal()
+    client_disconnected = pyqtSignal()
+    message_received = pyqtSignal(str)   # command type
+    message_sent = pyqtSignal()
+    
     def __init__(self, host='localhost', port=9876, iface=None):
         super().__init__()
         self.host = host
@@ -77,6 +83,7 @@ class QgisMCPServer(QObject):
                     self.client, address = self.socket.accept()
                     self.client.setblocking(False)
                     QgsMessageLog.logMessage(f"Connected to client: {address}", "QGIS MCP")
+                    self.client_connected.emit()
                 except BlockingIOError:
                     pass  # No connection waiting
                 except Exception as e:
@@ -96,9 +103,12 @@ class QgisMCPServer(QObject):
                                 command = json.loads(self.buffer.decode('utf-8'))
                                 # If successful, clear the buffer and process command
                                 self.buffer = b''
+                                cmd_type = command.get("type", "unknown")
+                                self.message_received.emit(cmd_type)
                                 response = self.execute_command(command)
                                 response_json = json.dumps(response)
                                 self.client.sendall(response_json.encode('utf-8'))
+                                self.message_sent.emit()
                             except json.JSONDecodeError:
                                 # Incomplete data, keep in buffer
                                 pass
@@ -108,6 +118,7 @@ class QgisMCPServer(QObject):
                             self.client.close()
                             self.client = None
                             self.buffer = b''
+                            self.client_disconnected.emit()
                     except BlockingIOError:
                         pass  # No data available
                     except Exception as e:
@@ -115,6 +126,7 @@ class QgisMCPServer(QObject):
                         self.client.close()
                         self.client = None
                         self.buffer = b''
+                        self.client_disconnected.emit()
                         
                 except Exception as e:
                     QgsMessageLog.logMessage(f"Error with client: {str(e)}", "QGIS MCP", Qgis.Warning)
@@ -122,6 +134,7 @@ class QgisMCPServer(QObject):
                         self.client.close()
                         self.client = None
                     self.buffer = b''
+                    self.client_disconnected.emit()
                     
         except Exception as e:
             QgsMessageLog.logMessage(f"Server error: {str(e)}", "QGIS MCP", Qgis.Critical)
@@ -519,10 +532,22 @@ class QgisMCPDockWidget(QDockWidget):
     """Dock widget for the QGIS MCP plugin"""
     closed = pyqtSignal()
     
+    # Style constants for the status indicator
+    INDICATOR_STYLE = (
+        "border-radius: 8px; min-width: 16px; max-width: 16px; "
+        "min-height: 16px; max-height: 16px; border: 1px solid #555;"
+    )
+    COLOR_GREY = f"background-color: #888; {INDICATOR_STYLE}"
+    COLOR_GREEN = f"background-color: #4CAF50; {INDICATOR_STYLE}"
+    COLOR_YELLOW = f"background-color: #FFC107; {INDICATOR_STYLE}"
+    
     def __init__(self, iface):
         super().__init__("QGIS MCP")
         self.iface = iface
         self.server = None
+        self._flash_timer = QTimer()
+        self._flash_timer.setSingleShot(True)
+        self._flash_timer.timeout.connect(self._end_flash)
         self.setup_ui()
     
     def setup_ui(self):
@@ -550,9 +575,22 @@ class QgisMCPDockWidget(QDockWidget):
         self.stop_button.setEnabled(False)
         layout.addWidget(self.stop_button)
         
-        # Add status label
+        # Status row: indicator light + label
+        from qgis.PyQt.QtWidgets import QHBoxLayout
+        status_layout = QHBoxLayout()
+        
+        self.indicator = QLabel()
+        self.indicator.setStyleSheet(self.COLOR_GREY)
+        status_layout.addWidget(self.indicator)
+        
         self.status_label = QLabel("Server: Stopped")
-        layout.addWidget(self.status_label)
+        status_layout.addWidget(self.status_label)
+        status_layout.addStretch()
+        layout.addLayout(status_layout)
+        
+        # Last activity label
+        self.activity_label = QLabel("")
+        layout.addWidget(self.activity_label)
         
         # Add to dock widget
         self.setWidget(widget)
@@ -562,9 +600,15 @@ class QgisMCPDockWidget(QDockWidget):
         if not self.server:
             port = self.port_spin.value()
             self.server = QgisMCPServer(port=port, iface=self.iface)
+            self.server.client_connected.connect(self._on_client_connected)
+            self.server.client_disconnected.connect(self._on_client_disconnected)
+            self.server.message_received.connect(self._on_message_received)
+            self.server.message_sent.connect(self._on_message_sent)
             
         if self.server.start():
             self.status_label.setText(f"Server: Running on port {self.server.port}")
+            self.indicator.setStyleSheet(self.COLOR_GREEN)
+            self.activity_label.setText("Waiting for client...")
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(True)
             self.port_spin.setEnabled(False)
@@ -576,12 +620,37 @@ class QgisMCPDockWidget(QDockWidget):
             self.server = None
             
         self.status_label.setText("Server: Stopped")
+        self.indicator.setStyleSheet(self.COLOR_GREY)
+        self.activity_label.setText("")
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.port_spin.setEnabled(True)
-        
+    
+    # --- Status indicator slots ---
+    
+    def _on_client_connected(self):
+        self.indicator.setStyleSheet(self.COLOR_GREEN)
+        self.activity_label.setText("Client connected")
+    
+    def _on_client_disconnected(self):
+        self.indicator.setStyleSheet(self.COLOR_GREEN)
+        self.activity_label.setText("Client disconnected — waiting...")
+    
+    def _on_message_received(self, cmd_type):
+        self.indicator.setStyleSheet(self.COLOR_YELLOW)
+        self.activity_label.setText(f"⟵ {cmd_type}")
+    
+    def _on_message_sent(self):
+        self.activity_label.setText(self.activity_label.text() + "  ✔")
+        self._flash_timer.start(400)
+    
+    def _end_flash(self):
+        if self.server and self.server.running:
+            self.indicator.setStyleSheet(self.COLOR_GREEN)
+
     def closeEvent(self, event):
         """Stop server on dock close"""
+        self._flash_timer.stop()
         self.stop_server()
         self.closed.emit()
         super().closeEvent(event)
