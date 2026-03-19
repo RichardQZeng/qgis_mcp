@@ -3,11 +3,12 @@ import io
 import sys
 import json
 import socket
+import threading
 import traceback
 from qgis.core import *
 from qgis.gui import *
 from qgis.PyQt.QtCore import QObject, pyqtSignal, QTimer, Qt, QSize
-from qgis.PyQt.QtWidgets import QAction, QDockWidget, QVBoxLayout, QLabel, QPushButton, QSpinBox, QWidget
+from qgis.PyQt.QtWidgets import QAction, QDockWidget, QVBoxLayout, QLabel, QPushButton, QSpinBox, QWidget, QApplication
 from qgis.PyQt.QtGui import QIcon, QColor
 from qgis.utils import active_plugins
 
@@ -30,6 +31,7 @@ class QgisMCPServer(QObject):
         self.client = None
         self.buffer = b''
         self.timer = None
+        self._executing = False
     
     def start(self):
         """Start the server"""
@@ -73,7 +75,7 @@ class QgisMCPServer(QObject):
     
     def process_server(self):
         """Process server operations (called by timer)"""
-        if not self.running:
+        if not self.running or self._executing:
             return
             
         try:
@@ -141,6 +143,7 @@ class QgisMCPServer(QObject):
 
     def execute_command(self, command):
         """Execute a command"""
+        self._executing = True
         try:
             cmd_type = command.get("type")
             params = command.get("params", {})
@@ -181,6 +184,8 @@ class QgisMCPServer(QObject):
             QgsMessageLog.logMessage(f"Error executing command: {str(e)}", "QGIS MCP", Qgis.Critical)
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
+        finally:
+            self._executing = False
     
     # Command handlers
     def ping(self, **kwargs):
@@ -233,60 +238,84 @@ class QgisMCPServer(QObject):
         else:
             return str(layer.type())
     
-    def execute_code(self, code, **kwargs):
-        """Execute arbitrary PyQGIS code"""
-
-        # Capture stdout and stderr
+    def execute_code(self, code, timeout=300, **kwargs):
+        """Execute arbitrary PyQGIS code in a worker thread to keep UI responsive.
+        
+        The code runs in a background thread while the main thread pumps events
+        to prevent QGIS from showing 'Not Responding'. A timeout (default 300s)
+        prevents infinite hangs.
+        """
         stdout_capture = io.StringIO()
         stderr_capture = io.StringIO()
         
-        # Store original stdout and stderr
         original_stdout = sys.stdout
         original_stderr = sys.stderr
         
-        try:
-            # Redirect stdout and stderr
-            sys.stdout = stdout_capture
-            sys.stderr = stderr_capture
-            
-            # Create a local namespace for execution
-            namespace = {
-                "qgis": Qgis,
-                "QgsProject": QgsProject,
-                "iface": self.iface,
-                "QgsApplication": QgsApplication,
-                "QgsVectorLayer": QgsVectorLayer,
-                "QgsRasterLayer": QgsRasterLayer,
-                "QgsCoordinateReferenceSystem": QgsCoordinateReferenceSystem
-            }
-            
-            # Execute the code
-            exec(code, namespace)
-            
-            # Restore stdout and stderr
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
-            
-            return {
-                "executed": True,
-                "stdout": stdout_capture.getvalue(),
-                "stderr": stderr_capture.getvalue()
-            }
-        except Exception as e:
-            # Generate full traceback
-            error_traceback = traceback.format_exc()
-            
-            # Restore stdout and stderr in case of exception
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
-            
-            return {
-                "executed": False,
-                "error": str(e),
-                "traceback": error_traceback,
-                "stdout": stdout_capture.getvalue(),
-                "stderr": stderr_capture.getvalue()
-            }
+        # Shared state for the worker thread
+        result = {}
+        done_event = threading.Event()
+        
+        def _worker():
+            try:
+                sys.stdout = stdout_capture
+                sys.stderr = stderr_capture
+                
+                namespace = {
+                    "qgis": Qgis,
+                    "QgsProject": QgsProject,
+                    "iface": self.iface,
+                    "QgsApplication": QgsApplication,
+                    "QgsVectorLayer": QgsVectorLayer,
+                    "QgsRasterLayer": QgsRasterLayer,
+                    "QgsCoordinateReferenceSystem": QgsCoordinateReferenceSystem
+                }
+                
+                exec(code, namespace)
+                
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+                
+                result["value"] = {
+                    "executed": True,
+                    "stdout": stdout_capture.getvalue(),
+                    "stderr": stderr_capture.getvalue()
+                }
+            except Exception as e:
+                error_traceback = traceback.format_exc()
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+                
+                result["value"] = {
+                    "executed": False,
+                    "error": str(e),
+                    "traceback": error_traceback,
+                    "stdout": stdout_capture.getvalue(),
+                    "stderr": stderr_capture.getvalue()
+                }
+            finally:
+                done_event.set()
+        
+        worker = threading.Thread(target=_worker, daemon=True)
+        worker.start()
+        
+        # Pump events while waiting so QGIS UI stays responsive
+        elapsed = 0.0
+        interval = 0.05  # 50ms
+        while not done_event.is_set():
+            QApplication.processEvents()
+            done_event.wait(interval)
+            elapsed += interval
+            if elapsed >= timeout:
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+                return {
+                    "executed": False,
+                    "error": f"Execution timed out after {timeout} seconds",
+                    "stdout": stdout_capture.getvalue(),
+                    "stderr": stderr_capture.getvalue()
+                }
+        
+        return result.get("value", {"executed": False, "error": "Unknown error"})
     
     def add_vector_layer(self, path, name=None, provider="ogr", **kwargs):
         """Add a vector layer to the project"""
