@@ -159,6 +159,7 @@ class QgisMCPServer(QObject):
                 "get_layers": self.get_layers,
                 "remove_layer": self.remove_layer,
                 "zoom_to_layer": self.zoom_to_layer,
+                "zoom_to": self.zoom_to,
                 "get_layer_features": self.get_layer_features,
                 "execute_processing": self.execute_processing,
                 "save_project": self.save_project,
@@ -410,6 +411,104 @@ class QgisMCPServer(QObject):
             return {"zoomed_to": layer_id}
         else:
             raise Exception(f"Layer not found: {layer_id}")
+
+    def zoom_to(self, mode, layer_id=None, attribute_name=None, attribute_value=None,
+                feature_id=None, scale=None, clear_selection=True, **kwargs):
+        """Unified zoom tool using safe iface actions.
+
+        Modes:
+            layer    - zoom to a layer extent
+            feature  - find a feature by attribute or id, select it, zoom to selection
+            selected - zoom to currently selected features
+            full     - zoom to all layers
+            scale    - set map scale (keeps center)
+        """
+        project = QgsProject.instance()
+        canvas = self.iface.mapCanvas()
+
+        def _canvas_info():
+            ext = canvas.extent()
+            return {
+                "extent": [ext.xMinimum(), ext.yMinimum(), ext.xMaximum(), ext.yMaximum()],
+                "scale": canvas.scale(),
+            }
+
+        if mode == "full":
+            self.iface.zoomFull()
+            return {"mode": "full", "status": "ok", **_canvas_info()}
+
+        if mode == "scale":
+            if scale is None:
+                raise Exception("scale parameter is required for mode 'scale'")
+            canvas.zoomScale(scale)
+            return {"mode": "scale", "status": "ok", **_canvas_info()}
+
+        # Modes that need a layer
+        if mode in ("layer", "feature", "selected") and layer_id:
+            if layer_id not in project.mapLayers():
+                raise Exception(f"Layer not found: {layer_id}")
+            layer = project.mapLayer(layer_id)
+            self.iface.setActiveLayer(layer)
+
+        if mode == "layer":
+            if not layer_id:
+                raise Exception("layer_id is required for mode 'layer'")
+            self.iface.zoomToActiveLayer()
+            return {"mode": "layer", "layer": layer_id, "status": "ok", **_canvas_info()}
+
+        if mode == "selected":
+            self.iface.actionZoomToSelected().trigger()
+            return {"mode": "selected", "status": "ok", **_canvas_info()}
+
+        if mode == "feature":
+            if not layer_id:
+                raise Exception("layer_id is required for mode 'feature'")
+            layer = project.mapLayer(layer_id)
+            if not isinstance(layer, QgsVectorLayer):
+                raise Exception(f"Layer {layer_id} is not a vector layer")
+
+            # Find features
+            if feature_id is not None:
+                feat = layer.getFeature(feature_id)
+                if not feat.isValid():
+                    raise Exception(f"Feature id {feature_id} not found")
+                matched_ids = [feat.id()]
+            elif attribute_name and attribute_value is not None:
+                field_idx = layer.fields().indexOf(attribute_name)
+                if field_idx < 0:
+                    raise Exception(f"Field '{attribute_name}' not found in layer")
+                request = QgsFeatureRequest().setFilterExpression(
+                    f'"{attribute_name}" = \'{attribute_value}\''
+                )
+                matched_ids = [f.id() for f in layer.getFeatures(request)]
+                if not matched_ids:
+                    raise Exception(
+                        f"No features found where {attribute_name} = '{attribute_value}'"
+                    )
+            else:
+                raise Exception(
+                    "feature mode requires feature_id or attribute_name + attribute_value"
+                )
+
+            if clear_selection:
+                layer.removeSelection()
+            layer.select(matched_ids)
+            self.iface.setActiveLayer(layer)
+            self.iface.actionZoomToSelected().trigger()
+
+            result = {
+                "mode": "feature",
+                "layer": layer_id,
+                "matched_count": len(matched_ids),
+                "selected_ids": matched_ids,
+                "status": "ok",
+                **_canvas_info(),
+            }
+            if len(matched_ids) > 1:
+                result["warning"] = "Multiple features matched"
+            return result
+
+        raise Exception(f"Unknown zoom mode: {mode}")
     
     def get_layer_features(self, layer_id, limit=10, **kwargs):
         """Get features from a vector layer"""

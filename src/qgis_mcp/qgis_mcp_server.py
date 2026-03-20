@@ -220,6 +220,42 @@ def zoom_to_layer(ctx: Context, layer_id: str) -> str:
     return json.dumps(result, indent=2)
 
 @mcp.tool()
+def zoom_to(
+    ctx: Context,
+    mode: str,
+    layer_id: str = None,
+    attribute_name: str = None,
+    attribute_value: str = None,
+    feature_id: int = None,
+    scale: float = None,
+    clear_selection: bool = True,
+) -> str:
+    """Zoom the map view using safe QGIS iface actions.
+
+    Modes:
+        layer    - zoom to a layer extent (requires layer_id)
+        feature  - find a feature by attribute or id, select it, zoom to selection
+                   (requires layer_id and either feature_id or attribute_name + attribute_value)
+        selected - zoom to currently selected features (optional layer_id to set active layer)
+        full     - zoom to all layers
+        scale    - set map scale keeping current center (requires scale)
+    """
+    qgis = get_qgis_connection()
+    params = {"mode": mode, "clear_selection": clear_selection}
+    if layer_id is not None:
+        params["layer_id"] = layer_id
+    if attribute_name is not None:
+        params["attribute_name"] = attribute_name
+    if attribute_value is not None:
+        params["attribute_value"] = attribute_value
+    if feature_id is not None:
+        params["feature_id"] = feature_id
+    if scale is not None:
+        params["scale"] = scale
+    result = qgis.send_command("zoom_to", params)
+    return json.dumps(result, indent=2)
+
+@mcp.tool()
 def get_layer_features(ctx: Context, layer_id: str, limit: int = 10) -> str:
     """Retrieve features from a vector layer with an optional limit."""
     qgis = get_qgis_connection()

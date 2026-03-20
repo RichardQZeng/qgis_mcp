@@ -117,6 +117,26 @@ class QgisMCPClient:
     def zoom_to_layer(self, layer_id):
         """Zoom to a layer's extent"""
         return self.send_command("zoom_to_layer", {"layer_id": layer_id})
+
+    def zoom_to(self, mode, layer_id=None, attribute_name=None,
+                attribute_value=None, feature_id=None, scale=None,
+                clear_selection=True):
+        """Unified zoom using safe iface actions.
+
+        Modes: layer, feature, selected, full, scale
+        """
+        params = {"mode": mode, "clear_selection": clear_selection}
+        if layer_id is not None:
+            params["layer_id"] = layer_id
+        if attribute_name is not None:
+            params["attribute_name"] = attribute_name
+        if attribute_value is not None:
+            params["attribute_value"] = attribute_value
+        if feature_id is not None:
+            params["feature_id"] = feature_id
+        if scale is not None:
+            params["scale"] = scale
+        return self.send_command("zoom_to", params)
     
     def get_layer_features(self, layer_id, limit=10):
         """Get features from a vector layer"""
