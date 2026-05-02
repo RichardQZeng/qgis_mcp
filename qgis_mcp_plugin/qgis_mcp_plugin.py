@@ -20,8 +20,9 @@ class QgisMCPServer(QObject):
     client_disconnected = pyqtSignal()
     message_received = pyqtSignal(str)   # command type
     message_sent = pyqtSignal()
+    server_error = pyqtSignal(str)       # error message
     
-    def __init__(self, host='localhost', port=9876, iface=None):
+    def __init__(self, host='localhost', port=8765, iface=None):
         super().__init__()
         self.host = host
         self.port = port
@@ -32,6 +33,7 @@ class QgisMCPServer(QObject):
         self.buffer = b''
         self.timer = None
         self._executing = False
+        self.last_error = None
     
     def start(self):
         """Start the server"""
@@ -52,7 +54,10 @@ class QgisMCPServer(QObject):
             QgsMessageLog.logMessage(f"QGIS MCP server started on {self.host}:{self.port}", "QGIS MCP")
             return True
         except Exception as e:
-            QgsMessageLog.logMessage(f"Failed to start server: {str(e)}", "QGIS MCP", Qgis.Critical)
+            err = str(e)
+            QgsMessageLog.logMessage(f"Failed to start server: {err}", "QGIS MCP", Qgis.Critical)
+            self.last_error = err
+            self.server_error.emit(err)
             self.stop()
             return False
             
@@ -668,6 +673,7 @@ class QgisMCPDockWidget(QDockWidget):
     COLOR_GREY = f"background-color: #888; {INDICATOR_STYLE}"
     COLOR_GREEN = f"background-color: #4CAF50; {INDICATOR_STYLE}"
     COLOR_YELLOW = f"background-color: #FFC107; {INDICATOR_STYLE}"
+    COLOR_RED = f"background-color: #E53935; {INDICATOR_STYLE}"
     
     def __init__(self, iface):
         super().__init__("QGIS MCP")
@@ -690,7 +696,7 @@ class QgisMCPDockWidget(QDockWidget):
         self.port_spin = QSpinBox()
         self.port_spin.setMinimum(1024)
         self.port_spin.setMaximum(65535)
-        self.port_spin.setValue(9876)
+        self.port_spin.setValue(8765)
         layout.addWidget(self.port_spin)
         
         # Add server control buttons
@@ -732,7 +738,9 @@ class QgisMCPDockWidget(QDockWidget):
             self.server.client_disconnected.connect(self._on_client_disconnected)
             self.server.message_received.connect(self._on_message_received)
             self.server.message_sent.connect(self._on_message_sent)
-            
+            self.server.server_error.connect(self._on_server_error)
+
+        port = self.server.port
         if self.server.start():
             self.status_label.setText(f"Server: Running on port {self.server.port}")
             self.indicator.setStyleSheet(self.COLOR_GREEN)
@@ -740,6 +748,17 @@ class QgisMCPDockWidget(QDockWidget):
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(True)
             self.port_spin.setEnabled(False)
+        else:
+            # Failure path: surface error in the status row
+            err = getattr(self.server, "last_error", "") or "unknown error"
+            self.status_label.setText(f"Server: Failed on port {port}")
+            self.indicator.setStyleSheet(self.COLOR_RED)
+            self.activity_label.setText(err)
+            self.activity_label.setToolTip(err)
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
+            self.port_spin.setEnabled(True)
+            self.server = None
     
     def stop_server(self):
         """Stop the server"""
@@ -771,6 +790,12 @@ class QgisMCPDockWidget(QDockWidget):
     def _on_message_sent(self):
         self.activity_label.setText(self.activity_label.text() + "  ✔")
         self._flash_timer.start(400)
+
+    def _on_server_error(self, message):
+        self.indicator.setStyleSheet(self.COLOR_RED)
+        self.status_label.setText("Server: Error")
+        self.activity_label.setText(message)
+        self.activity_label.setToolTip(message)
     
     def _end_flash(self):
         if self.server and self.server.running:

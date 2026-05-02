@@ -9,7 +9,7 @@ import argparse
 import sys
 
 class QgisMCPClient:
-    def __init__(self, host='localhost', port=9876):
+    def __init__(self, host='localhost', port=8765):
         self.host = host
         self.port = port
         self.socket = None
@@ -176,7 +176,7 @@ def print_json(data):
 
 def main():
     # Conectar al servidor QGIS MCP
-    client = QgisMCPClient(host='localhost', port=9876)
+    client = QgisMCPClient(host='localhost', port=8765)
     if not client.connect():
         print("No se pudo conectar al servidor QGIS MCP")
         return
