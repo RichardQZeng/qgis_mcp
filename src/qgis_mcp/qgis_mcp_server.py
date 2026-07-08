@@ -230,7 +230,12 @@ def zoom_to(
     scale: float = None,
     clear_selection: bool = True,
 ) -> str:
-    """Zoom the map view using safe QGIS iface actions.
+    """Preferred safe tool for zooming the QGIS map view.
+
+    Use this tool instead of execute_code for zooming, selecting, or changing
+    the visible map canvas. It uses QGIS iface actions such as Zoom to Selected
+    and avoids fragile direct canvas setExtent/refresh scripts that can freeze
+    QGIS.
 
     Modes:
         layer    - zoom to a layer extent (requires layer_id)
@@ -291,7 +296,12 @@ def render_map(ctx: Context, path: str, width: int = 800, height: int = 600) -> 
 
 @mcp.tool()
 def execute_code(ctx: Context, code: str) -> str:
-    """Execute arbitrary PyQGIS code provided as a string."""
+    """Execute arbitrary PyQGIS code provided as a string.
+
+    Do not use this for map canvas zooming, canvas refresh, or GUI interaction.
+    Use zoom_to for zooming because it follows QGIS's safer built-in action
+    pipeline and avoids direct canvas manipulation that can freeze QGIS.
+    """
     qgis = get_qgis_connection()
     result = qgis.send_command("execute_code", {"code": code})
     return json.dumps(result, indent=2)

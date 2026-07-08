@@ -114,11 +114,12 @@ Once the config file has been set on Claude, and the server is running on QGIS, 
 - `get_layers` - Retrieve all layers in the current project
 - `remove_layer` - Remove a layer from the project by its ID
 - `zoom_to_layer` - Zoom to the extent of a specified layer
+- `zoom_to` - Preferred safe zoom tool for layer, feature, selected, full, and scale zooms. Use this instead of `execute_code` for map canvas zooming; it uses QGIS built-in iface actions and avoids fragile direct canvas `setExtent`/refresh scripts.
 - `get_layer_features` - Retrieve features from a vector layer with an optional limit
 - `execute_processing` - Execute a processing algorithm with the given parameters
 - `save_project` - Save the current project to the given path
 - `render_map` - Render the current map view to an image file
-- `execute_code` - Execute arbitrary PyQGIS code provided as a string
+- `execute_code` - Execute arbitrary PyQGIS code provided as a string. Do not use this for map canvas zoom, refresh, or GUI interaction; use `zoom_to` instead.
 
 ### Example Commands
 

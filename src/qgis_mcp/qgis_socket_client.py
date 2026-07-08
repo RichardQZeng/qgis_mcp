@@ -81,7 +81,10 @@ class QgisMCPClient:
         return self.send_command("get_project_info")
     
     def execute_code(self, code):
-        """Execute arbitrary PyQGIS code"""
+        """Execute arbitrary PyQGIS code.
+
+        Do not use this for map canvas zoom or refresh operations; use zoom_to.
+        """
         return self.send_command("execute_code", {"code": code})
     
     def add_vector_layer(self, path, name=None, provider="ogr"):
@@ -121,7 +124,9 @@ class QgisMCPClient:
     def zoom_to(self, mode, layer_id=None, attribute_name=None,
                 attribute_value=None, feature_id=None, scale=None,
                 clear_selection=True):
-        """Unified zoom using safe iface actions.
+        """Preferred safe zoom tool using QGIS iface actions.
+
+        Use this instead of execute_code for zooming the map canvas.
 
         Modes: layer, feature, selected, full, scale
         """

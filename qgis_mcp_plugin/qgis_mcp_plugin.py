@@ -246,6 +246,9 @@ class QgisMCPServer(QObject):
     
     def execute_code(self, code, timeout=300, **kwargs):
         """Execute arbitrary PyQGIS code in a worker thread to keep UI responsive.
+
+        Do not use this for map canvas zooming, canvas refresh, or GUI actions.
+        Use zoom_to instead; it follows QGIS's safer built-in action pipeline.
         
         The code runs in a background thread while the main thread pumps events
         to prevent QGIS from showing 'Not Responding'. A timeout (default 300s)
@@ -419,7 +422,11 @@ class QgisMCPServer(QObject):
 
     def zoom_to(self, mode, layer_id=None, attribute_name=None, attribute_value=None,
                 feature_id=None, scale=None, clear_selection=True, **kwargs):
-        """Unified zoom tool using safe iface actions.
+        """Preferred safe zoom tool using QGIS iface actions.
+
+        Use this instead of execute_code for zooming the map canvas. Feature
+        zooms select the target feature and trigger QGIS's built-in Zoom to
+        Selected action, avoiding direct canvas setExtent/refresh calls.
 
         Modes:
             layer    - zoom to a layer extent
